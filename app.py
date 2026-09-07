@@ -1,22 +1,24 @@
 # app.py
 # ---------------------------------------------------------
-# เว็บแอป Streamlit สำหรับทำนายผลด้วยโมเดลที่ฝึกไว้แล้ว (.pkcls)
-# หมายเหตุสำคัญ: โค้ดนี้เป็น "เทมเพลตทั่วไป" สำหรับโมเดลที่รับ
-# ฟีเจอร์แบบตาราง (tabular features) เช่น อาการ/ค่าตรวจต่าง ๆ
-# ไม่ใช่โมเดลที่รับภาพ X-ray โดยตรง (โมเดลรับภาพจะต้องใช้ CNN/PyTorch/TensorFlow
-# และมีวิธีโหลด-ทำนายต่างออกไปทั้งหมด) — ดูคำอธิบายท้ายไฟล์
+# เว็บแอป Streamlit สำหรับทำนายผลด้วยโมเดล Orange (.pkcls)
+# หมายเหตุสำคัญ: ไฟล์ .pkcls เป็นฟอร์แมตของโปรแกรม Orange Data Mining
+# (ไม่ใช่ scikit-learn เพียว ๆ) จึงต้องติดตั้งไลบรารี "Orange3"
+# และใช้วิธีทำนายผลแบบเฉพาะของ Orange (ผ่าน Domain/Table)
+# จุดดีคือ: โมเดล Orange เก็บข้อมูล "Domain" (ชื่อฟีเจอร์ + ชนิด +
+# ตัวเลือก) ไว้ในตัวเอง ทำให้เราสร้างฟอร์มกรอกข้อมูลแบบไดนามิก
+# ที่ตรงกับฟีเจอร์จริงของโมเดลได้อัตโนมัติ ไม่ต้อง hardcode เอง
 # ---------------------------------------------------------
 
 import streamlit as st
 import joblib
-import pandas as pd
 import glob
 import os
+from Orange.data import Domain, Table
 
 # -----------------------------
 # 1) ตั้งค่าหน้าเว็บและหัวข้อแอป
 # -----------------------------
-st.set_page_config(page_title="จำแนกโรค Covid จากข้อมูล", page_icon="🩺")
+st.set_page_config(page_title="จำแนกโรค Covid", page_icon="🩺")
 st.title("โปรแกรมจำแนกโรค Covid จากภาพ X-ray")
 
 st.write(
@@ -26,34 +28,28 @@ st.write(
 
 # -----------------------------------------------------
 # 2) ส่วนเลือกโมเดล (.pkcls) ให้ผู้ใช้เลือกเองได้
-#    - วิธีที่ 1: สแกนหาไฟล์ .pkcls ในโฟลเดอร์ "models"
-#      (ให้ดาวน์โหลดไฟล์จาก Google Drive โฟลเดอร์ ModelW10
-#       มาวางไว้ในโฟลเดอร์ models/ ข้าง ๆ ไฟล์ app.py นี้ก่อนรันแอป
-#       เนื่องจาก Streamlit ไม่สามารถอ่านไฟล์จาก Google Drive
-#       โดยตรงได้ ต้องดาวน์โหลดมาเก็บไว้ในเครื่อง/เซิร์ฟเวอร์ก่อน)
-#    - วิธีที่ 2: อัปโหลดไฟล์ .pkcls เองผ่านหน้าเว็บ (สำรอง)
+#    - สแกนหาไฟล์ .pkcls ในโฟลเดอร์ "models" (ต้องดาวน์โหลดจาก
+#      Google Drive มาวางไว้ใน repo ก่อน ตามที่ทำไปแล้ว)
+#    - หรืออัปโหลดไฟล์ .pkcls เองผ่านหน้าเว็บ (สำรอง)
 # -----------------------------------------------------
 st.sidebar.header("⚙️ เลือกโมเดล")
 
-MODEL_DIR = "models"  # โฟลเดอร์เก็บไฟล์โมเดลที่ดาวน์โหลดมาจาก Google Drive
+MODEL_DIR = "models"  # ต้องตรงกับชื่อโฟลเดอร์ใน repo GitHub
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# ค้นหาไฟล์นามสกุล .pkcls ทั้งหมดในโฟลเดอร์ models
 model_files = glob.glob(os.path.join(MODEL_DIR, "*.pkcls"))
 model_names = [os.path.basename(f) for f in model_files]
 
 selected_model_path = None
 
 if model_names:
-    selected_name = st.sidebar.selectbox("เลือกไฟล์โมเดลจากโฟลเดอร์ models/", model_names)
+    selected_name = st.sidebar.selectbox(f"เลือกไฟล์โมเดลจากโฟลเดอร์ {MODEL_DIR}/", model_names)
     selected_model_path = os.path.join(MODEL_DIR, selected_name)
 else:
-    st.sidebar.info("ไม่พบไฟล์ .pkcls ในโฟลเดอร์ models/ กรุณาอัปโหลดไฟล์โมเดลด้านล่าง")
+    st.sidebar.info(f"ไม่พบไฟล์ .pkcls ในโฟลเดอร์ {MODEL_DIR}/ กรุณาอัปโหลดไฟล์โมเดลด้านล่าง")
 
-# ทางเลือกสำรอง: อัปโหลดไฟล์โมเดลเอง (เผื่อไม่มีไฟล์ในโฟลเดอร์ models)
 uploaded_model = st.sidebar.file_uploader("หรืออัปโหลดไฟล์โมเดล (.pkcls)", type=["pkcls"])
 if uploaded_model is not None:
-    # บันทึกไฟล์ที่อัปโหลดลงในโฟลเดอร์ models เพื่อใช้งาน
     selected_model_path = os.path.join(MODEL_DIR, uploaded_model.name)
     with open(selected_model_path, "wb") as f:
         f.write(uploaded_model.getbuffer())
@@ -61,10 +57,12 @@ if uploaded_model is not None:
 
 # -----------------------------------------------------
 # 3) โหลดโมเดลด้วย joblib (ใช้ st.cache_resource กันโหลดซ้ำทุกครั้งที่รีเฟรช)
+#    หมายเหตุ: การ unpickle โมเดล Orange ต้อง import Orange ไว้ก่อน
+#    (import ไว้ด้านบนของไฟล์แล้ว) มิฉะนั้นจะขึ้น "No module named 'Orange'"
 # -----------------------------------------------------
 @st.cache_resource
 def load_model(path):
-    """โหลดโมเดลจากไฟล์ .pkcls ด้วย joblib"""
+    """โหลดโมเดล Orange จากไฟล์ .pkcls ด้วย joblib"""
     return joblib.load(path)
 
 model = None
@@ -78,27 +76,33 @@ else:
     st.warning("กรุณาเลือกหรืออัปโหลดไฟล์โมเดล (.pkcls) ก่อนใช้งาน")
 
 # -----------------------------------------------------
-# 4) ส่วนกรอกค่าตัวแปรต้น (features)
-#    *** จุดนี้เป็นตัวอย่างเท่านั้น ***
-#    ต้องแก้ไขชื่อฟีเจอร์ ชนิดข้อมูล และตัวเลือกให้ตรงกับ
-#    คอลัมน์จริงที่ใช้ตอนฝึกโมเดลของคุณ (ดูคำอธิบายท้ายไฟล์)
+# 4) สร้างฟอร์มกรอกข้อมูลแบบไดนามิก ตาม Domain ของโมเดล Orange
+#    - model.domain.attributes คือลิสต์ตัวแปรต้น (features) ที่โมเดลใช้ฝึก
+#    - ตัวแปรแบบ Discrete (หมวดหมู่) -> ใช้ st.selectbox พร้อมตัวเลือกจริง
+#      จาก var.values ที่เก็บไว้ในโมเดล
+#    - ตัวแปรแบบ Continuous (ตัวเลข) -> ใช้ st.number_input
 # -----------------------------------------------------
-st.subheader("กรอกข้อมูลผู้ป่วย / ค่าตัวแปรต้น")
+input_values = []
+attrs = []
 
-col1, col2 = st.columns(2)
+if model is not None:
+    domain = model.domain
+    attrs = list(domain.attributes)
 
-with col1:
-    # ตัวอย่างตัวแปรตัวเลข (numeric) -> ใช้ st.number_input
-    age = st.number_input("อายุ (ปี)", min_value=0, max_value=120, value=30, step=1)
-    temperature = st.number_input("อุณหภูมิร่างกาย (°C)", min_value=30.0, max_value=45.0, value=37.0, step=0.1)
-    oxygen_level = st.number_input("ระดับออกซิเจนในเลือด (%)", min_value=0.0, max_value=100.0, value=98.0, step=0.1)
+    st.subheader("กรอกข้อมูลผู้ป่วย / ค่าตัวแปรต้น")
+    st.caption(f"โมเดลนี้ใช้ทั้งหมด {len(attrs)} ฟีเจอร์ (ดึงชื่อและชนิดข้อมูลมาจากตัวโมเดลโดยตรง)")
 
-with col2:
-    # ตัวอย่างตัวแปรหมวดหมู่ (categorical) -> ใช้ st.selectbox
-    gender = st.selectbox("เพศ", ["ชาย", "หญิง"])
-    fever = st.selectbox("มีไข้หรือไม่", ["มี", "ไม่มี"])
-    cough = st.selectbox("มีอาการไอหรือไม่", ["มี", "ไม่มี"])
-    breathing_difficulty = st.selectbox("หายใจลำบากหรือไม่", ["มี", "ไม่มี"])
+    cols = st.columns(2)
+    for i, var in enumerate(attrs):
+        col = cols[i % 2]
+        with col:
+            if var.is_discrete:
+                # ตัวแปรหมวดหมู่: ใช้ตัวเลือกจริงที่โมเดลรู้จัก (var.values)
+                val = st.selectbox(var.name, list(var.values), key=f"feat_{var.name}")
+            else:
+                # ตัวแปรตัวเลข (continuous)
+                val = st.number_input(var.name, value=0.0, key=f"feat_{var.name}")
+            input_values.append(val)
 
 # -----------------------------------------------------
 # 5) ปุ่มทำนายผล
@@ -107,72 +111,42 @@ if st.button("ทำนายผล"):
     if model is None:
         st.error("ยังไม่ได้โหลดโมเดล กรุณาเลือกหรืออัปโหลดไฟล์โมเดลก่อน")
     else:
-        # -------------------------------------------------
-        # 5.1 รวมค่าที่ผู้ใช้กรอกเป็น DataFrame แถวเดียว
-        #     ชื่อคอลัมน์ต้อง "ตรงกับชื่อคอลัมน์ตอนฝึกโมเดล" ทุกตัว
-        # -------------------------------------------------
-        input_dict = {
-            "age": [age],
-            "temperature": [temperature],
-            "oxygen_level": [oxygen_level],
-            "gender": [gender],
-            "fever": [fever],
-            "cough": [cough],
-            "breathing_difficulty": [breathing_difficulty],
-        }
-        input_df = pd.DataFrame(input_dict)
-
-        # -------------------------------------------------
-        # 5.2 One-hot encode คอลัมน์ข้อความ (categorical)
-        #     ให้เหมือนกับตอนฝึกโมเดล (เช่น ใช้ pd.get_dummies)
-        # -------------------------------------------------
-        categorical_cols = ["gender", "fever", "cough", "breathing_difficulty"]
-        input_encoded = pd.get_dummies(input_df, columns=categorical_cols)
-
-        # -------------------------------------------------
-        # 5.3 จัดคอลัมน์ให้ตรงกับตอนฝึกโมเดล
-        #     - ถ้าโมเดล (เช่น scikit-learn) มี attribute feature_names_in_
-        #       จะใช้ค่านี้จัดเรียง/เติมคอลัมน์ที่ขาดให้อัตโนมัติ
-        #     - ถ้าไม่มี ให้ระบุ "training_columns" เองแบบ hard-code
-        #       (คัดลอกรายชื่อคอลัมน์จากตอนฝึกโมเดลมาใส่ตรงนี้)
-        # -------------------------------------------------
-        if hasattr(model, "feature_names_in_"):
-            training_columns = list(model.feature_names_in_)
-        else:
-            # *** ตัวอย่าง: ต้องแก้ไขให้ตรงกับคอลัมน์จริงตอนฝึกโมเดล ***
-            training_columns = [
-                "age", "temperature", "oxygen_level",
-                "gender_ชาย", "gender_หญิง",
-                "fever_มี", "fever_ไม่มี",
-                "cough_มี", "cough_ไม่มี",
-                "breathing_difficulty_มี", "breathing_difficulty_ไม่มี",
-            ]
-
-        # เติมคอลัมน์ที่ขาดด้วยค่า 0 และเรียงลำดับคอลัมน์ให้ตรงกับตอนฝึก
-        input_final = input_encoded.reindex(columns=training_columns, fill_value=0)
-
-        # -------------------------------------------------
-        # 5.4 ส่งเข้าโมเดลเพื่อทำนายผล
-        # -------------------------------------------------
         try:
-            prediction = model.predict(input_final)[0]
+            # -------------------------------------------------
+            # 5.1 สร้าง Orange Table จากค่าที่ผู้ใช้กรอก
+            #     ใช้ Domain เดียวกับตอนฝึกโมเดล (เฉพาะฝั่ง attributes
+            #     ไม่รวม class_var เพราะเรายังไม่รู้คำตอบ)
+            #     Orange จะแปลงค่า string/number ให้ตรงกับตัวแปรแต่ละ
+            #     ตัวให้อัตโนมัติ (เหมือนการ one-hot/encode ภายในตัว)
+            # -------------------------------------------------
+            predict_domain = Domain(attrs)
+            input_table = Table.from_list(predict_domain, [input_values])
 
-            # ถ้าโมเดลรองรับ predict_proba จะแสดงความมั่นใจ (%) ด้วย
+            # -------------------------------------------------
+            # 5.2 ส่งเข้าโมเดลเพื่อทำนายผล
+            #     เรียก model(table) จะได้ค่ารหัส (float) ของคลาสที่ทำนายได้
+            #     ต้องแปลงกลับเป็นชื่อจริงด้วย domain.class_var.values
+            # -------------------------------------------------
+            prediction_code = model(input_table)
+            predicted_label = model.domain.class_var.values[int(prediction_code[0])]
+
+            # ถ้าต้องการความน่าจะเป็น (probability) ด้วย ใช้ ret=Model.ValueProbs
             proba_text = ""
-            if hasattr(model, "predict_proba"):
-                proba = model.predict_proba(input_final)[0]
-                max_proba = max(proba) * 100
+            try:
+                from Orange.base import Model as OrangeModel
+                _, probs = model(input_table, ret=OrangeModel.ValueProbs)
+                max_proba = max(probs[0]) * 100
                 proba_text = f" (ความมั่นใจประมาณ {max_proba:.2f}%)"
+            except Exception:
+                pass  # ถ้าโมเดลไม่รองรับ predict_proba ก็ข้ามไป ไม่ error
 
             # -------------------------------------------------
             # 6) แสดงผลการทำนายให้อ่านง่าย
             # -------------------------------------------------
-            if str(prediction).lower() in ["1", "covid", "positive", "yes", "มี"]:
-                st.error(f"⚠️ ผลการทำนาย: มีความเสี่ยงเป็น Covid{proba_text}")
+            if str(predicted_label).lower() in ["1", "covid", "positive", "yes", "มี", "ป่วย"]:
+                st.error(f"⚠️ ผลการทำนาย: {predicted_label}{proba_text}")
             else:
-                st.success(f"✅ ผลการทำนาย: ไม่พบความเสี่ยงเป็น Covid{proba_text}")
-
-            st.write("ค่าดิบที่โมเดลทำนายได้:", prediction)
+                st.success(f"✅ ผลการทำนาย: {predicted_label}{proba_text}")
 
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดระหว่างทำนายผล: {e}")
