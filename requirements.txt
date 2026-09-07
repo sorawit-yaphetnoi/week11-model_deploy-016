@@ -1,3 +1,4 @@
 streamlit==1.38.0
 joblib==1.4.2
 Orange3==3.36.2
+setuptools
