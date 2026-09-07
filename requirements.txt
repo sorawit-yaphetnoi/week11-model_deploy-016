@@ -2,3 +2,4 @@ streamlit==1.38.0
 scikit-learn==1.5.2
 pandas==2.2.3
 joblib==1.4.2
+Orange3==3.36.2
