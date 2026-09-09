@@ -7,3 +7,4 @@ setuptools==75.6.0
 Orange3
 Orange3-ImageAnalytics>=0.13.0
 Pillow>=10.0
+PyQt5
