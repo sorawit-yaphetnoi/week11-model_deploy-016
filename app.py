@@ -17,6 +17,12 @@
 #     (มากกว่า 20 ช่อง) จะถูกซ่อนไว้ใน expander เพื่อไม่ให้หน้ายาวเกินไป
 #   - รองรับการทำนายพร้อมกันหลายแถว (batch) เมื่ออัปโหลด CSV ที่มี
 #     มากกว่า 1 แถว จะแสดงผลลัพธ์เป็นตาราง พร้อมดาวน์โหลดผลลัพธ์ได้
+#   - [ใหม่] รองรับ "อัปโหลดภาพ X-ray" โดยตรง — ระบบจะสกัด Image
+#     Embedding (2048 มิติ) จากภาพให้อัตโนมัติผ่าน Orange
+#     (orangecontrib.imageanalytics.ImageEmbedder) แล้วส่งเข้าโมเดล
+#     ทันที ไม่ต้องแปลงเป็น CSV เอง — ต้องเลือกโมเดล embedder ให้ตรง
+#     กับตอนฝึกโมเดลใน Orange ไม่งั้นค่าที่ได้จะผิด (ค่า default คือ
+#     Inception v3 เพราะให้ผล 2048 มิติตรงกับที่โมเดลต้องการ)
 # ---------------------------------------------------------
 
 import streamlit as st
@@ -24,6 +30,7 @@ import joblib
 import glob
 import os
 import io
+import tempfile
 import pandas as pd
 from Orange.data import Domain, Table
 
@@ -37,6 +44,21 @@ st.write(
     "เลือกวิธีกรอกข้อมูลด้านล่าง แล้วกดปุ่ม **ทำนายผล** "
     "เพื่อให้โมเดลที่เลือกไว้ทำการจำแนกผล"
 )
+
+# -----------------------------------------------------
+# ตัวเลือกโมเดล embedder ของ Orange ("Image Embedding" widget)
+# key ที่ใช้เรียก ImageEmbedder ต้องตรงกับใน orangecontrib.imageanalytics
+# *** ต้องเลือกให้ตรงกับตอนฝึกโมเดลจริง ไม่งั้นค่าที่ได้จะผิด ***
+# -----------------------------------------------------
+EMBEDDER_OPTIONS = {
+    "Inception v3 (ค่าเริ่มต้นของ Orange, 2048 มิติ, ต้องต่อเน็ต)": "inception-v3",
+    "SqueezeNet (ประมวลผลในเครื่อง ไม่ต้องต่อเน็ต)": "squeezenet",
+    "Painters (ต้องต่อเน็ต)": "painters",
+    "VGG-16 (ต้องต่อเน็ต)": "vgg16",
+    "VGG-19 (ต้องต่อเน็ต)": "vgg19",
+    "DeepLoc (ต้องต่อเน็ต)": "deeploc",
+    "openface (ต้องต่อเน็ต)": "openface",
+}
 
 # -----------------------------------------------------
 # 2) ส่วนเลือกโมเดล (.pkcls) ให้ผู้ใช้เลือกเองได้
@@ -135,7 +157,11 @@ if model is not None:
 
     input_mode = st.radio(
         "เลือกวิธีกรอกข้อมูล",
-        ["📄 อัปโหลดไฟล์ CSV (แนะนำเมื่อมีฟีเจอร์จำนวนมาก)", "✍️ กรอกข้อมูลทีละช่องด้วยตนเอง"],
+        [
+            "📄 อัปโหลดไฟล์ CSV (แนะนำเมื่อมีฟีเจอร์จำนวนมาก)",
+            "✍️ กรอกข้อมูลทีละช่องด้วยตนเอง",
+            "🖼️ อัปโหลดภาพ X-ray (สกัด embedding อัตโนมัติ)",
+        ],
         horizontal=True,
     )
 
@@ -188,7 +214,7 @@ if model is not None:
     # 5.2 โหมดกรอกมือทีละช่อง
     #     ถ้าฟีเจอร์เยอะ (> 20) จะซ่อนไว้ใน expander เพื่อไม่ให้หน้ายาวเกินไป
     # -------------------------------------------------
-    else:
+    elif input_mode.startswith("✍️"):
         manual_values = {}
 
         def render_manual_fields():
@@ -212,6 +238,90 @@ if model is not None:
         if manual_values:
             input_df = pd.DataFrame([manual_values])
 
+    # -------------------------------------------------
+    # 5.3 [ใหม่] โหมดอัปโหลดภาพ X-ray โดยตรง
+    #     สกัด Image Embedding ผ่าน Orange (orangecontrib.imageanalytics)
+    #     แล้วแปลงเป็น DataFrame 1 แถว ที่มีคอลัมน์ตรงกับ attrs ของโมเดล
+    #     ใช้ st.session_state เก็บผลลัพธ์ embedding ไว้ เพราะการกดปุ่ม
+    #     "ทำนายผล" หลักด้านล่างจะทำให้สคริปต์รันใหม่ทั้งหมด
+    #     (ถ้าไม่เก็บไว้ embedding ที่สกัดไปแล้วจะหายไปทันที)
+    # -------------------------------------------------
+    else:  # input_mode.startswith("🖼️")
+        embedder_label = st.selectbox(
+            "เลือกโมเดล Image Embedding (ต้องตรงกับตอนฝึกโมเดลใน Orange)",
+            options=list(EMBEDDER_OPTIONS.keys()),
+            index=0,  # ค่าเริ่มต้น = Inception v3 (2048 มิติ)
+        )
+        embedder_key = EMBEDDER_OPTIONS[embedder_label]
+
+        st.caption(
+            "⚠️ Embedder ส่วนใหญ่ (ยกเว้น SqueezeNet) จะส่งภาพไปประมวลผลที่เซิร์ฟเวอร์ "
+            "ของ Orange (biolab) ผ่านอินเทอร์เน็ต เช่นเดียวกับตอนใช้ widget "
+            "'Image Embedding' ใน Orange ตอนฝึกโมเดล กรุณาเลือกโมเดลให้ตรงกับตอนฝึก "
+            "ไม่งั้นค่าที่ได้จะผิดแม้จำนวนมิติจะเท่ากันก็ตาม"
+        )
+
+        uploaded_image = st.file_uploader(
+            "อัปโหลดภาพ X-ray (jpg, jpeg, png)", type=["jpg", "jpeg", "png"]
+        )
+
+        if uploaded_image is not None:
+            st.image(uploaded_image, caption="ภาพที่อัปโหลด", width=300)
+
+            if st.button("🔎 สกัด embedding จากภาพนี้"):
+                tmp_path = None
+                try:
+                    suffix = os.path.splitext(uploaded_image.name)[1] or ".jpg"
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp.write(uploaded_image.getbuffer())
+                        tmp_path = tmp.name
+
+                    with st.spinner("กำลังสกัด embedding จากภาพ (อาจใช้เวลาสักครู่)..."):
+                        from orangecontrib.imageanalytics.image_embedder import ImageEmbedder
+
+                        with ImageEmbedder(model=embedder_key) as embedder:
+                            embeddings = embedder([tmp_path])
+
+                    if not embeddings or embeddings[0] is None:
+                        st.error(
+                            "ไม่สามารถสกัด embedding จากภาพนี้ได้ "
+                            "(เซิร์ฟเวอร์ embedding อาจไม่ตอบสนอง หรือไฟล์ภาพเสียหาย) "
+                            "กรุณาลองใหม่อีกครั้ง"
+                        )
+                    else:
+                        vec = embeddings[0]
+                        if len(vec) != len(attrs):
+                            st.error(
+                                f"จำนวนมิติของ embedding ที่ได้ ({len(vec)}) "
+                                f"ไม่ตรงกับที่โมเดลต้องการ ({len(attrs)} มิติ) "
+                                f"กรุณาเปลี่ยนตัวเลือกโมเดล Image Embedding ด้านบน "
+                                f"ให้ตรงกับตอนฝึกโมเดลใน Orange แล้วลองใหม่"
+                            )
+                        else:
+                            row = {var.name: float(v) for var, v in zip(attrs, vec)}
+                            # เก็บผลลัพธ์ไว้ใน session_state กันหายตอนกดปุ่ม "ทำนายผล"
+                            st.session_state["image_input_df"] = pd.DataFrame([row])
+                            st.success(
+                                "สกัด embedding สำเร็จ ✅ "
+                                "กดปุ่ม 'ทำนายผล' ด้านล่างเพื่อดูผลลัพธ์ได้เลย"
+                            )
+                except ModuleNotFoundError as e:
+                    st.error(
+                        f"ขาดไลบรารีที่จำเป็น: {e} — กรุณาติดตั้ง Orange3-ImageAnalytics "
+                        f"ตาม requirements.txt ก่อนใช้งานโหมดนี้"
+                    )
+                except Exception as e:
+                    st.error(f"เกิดข้อผิดพลาดระหว่างสกัด embedding: {e}")
+                finally:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+        # ถ้ามี embedding ที่สกัดสำเร็จค้างอยู่ใน session_state ให้ใช้เป็น input_df
+        if "image_input_df" in st.session_state:
+            input_df = st.session_state["image_input_df"]
+            with st.expander("ดูค่า embedding ที่จะส่งเข้าโมเดล (2048 มิติ)"):
+                st.dataframe(input_df, use_container_width=True)
+
 # -----------------------------------------------------
 # 6) ปุ่มทำนายผล
 # -----------------------------------------------------
@@ -219,7 +329,10 @@ if st.button("ทำนายผล", type="primary"):
     if model is None:
         st.error("ยังไม่ได้โหลดโมเดล กรุณาเลือกหรืออัปโหลดไฟล์โมเดลก่อน")
     elif input_df is None or input_df.empty:
-        st.error("ยังไม่มีข้อมูลสำหรับทำนายผล กรุณากรอกข้อมูลหรืออัปโหลดไฟล์ CSV ก่อน")
+        st.error(
+            "ยังไม่มีข้อมูลสำหรับทำนายผล กรุณากรอกข้อมูล อัปโหลดไฟล์ CSV "
+            "หรืออัปโหลดภาพ X-ray แล้วกด 'สกัด embedding' ก่อน"
+        )
     else:
         try:
             result_df = predict_dataframe(model, attrs, input_df)
