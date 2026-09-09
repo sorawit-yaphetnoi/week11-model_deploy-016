@@ -1,10 +1,9 @@
 streamlit==1.38.0
 joblib==1.4.2
 pandas>=2.0
-numpy<2.0
 scipy
 scikit-learn
 setuptools==75.6.0
-Orange3==3.36.2
+Orange3
 Orange3-ImageAnalytics>=0.13.0
 Pillow>=10.0
